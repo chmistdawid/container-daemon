@@ -6,31 +6,26 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
 const socketPath = "/var/run/cont.sock"
 
 func main() {
-	// Detach process if needed (not covered here for brevity)
 	setupLogging()
 
-	// Clean up the socket file if it exists
 	if err := os.RemoveAll(socketPath); err != nil {
 		log.Fatalf("Failed to remove existing socket file: %v", err)
 	}
 
-	// Create and start the Unix socket server
 	go startUnixSocketServer()
 
-	// Handle signals for clean shutdown
 	go handleSignals()
 
-	// Block main to keep the daemon alive
 	select {}
 }
 
-// startUnixSocketServer starts a Unix domain socket server.
 func startUnixSocketServer() {
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -38,7 +33,6 @@ func startUnixSocketServer() {
 	}
 	defer listener.Close()
 
-	// Ensure the socket file has appropriate permissions
 	if err := os.Chmod(socketPath, 0666); err != nil {
 		log.Fatalf("Failed to set permissions on socket file: %v", err)
 	}
@@ -55,7 +49,6 @@ func startUnixSocketServer() {
 	}
 }
 
-// handleConnection handles incoming connections to the Unix socket.
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
@@ -65,8 +58,7 @@ func handleConnection(conn net.Conn) {
 	for scanner.Scan() {
 		msg := scanner.Text()
 		log.Printf("Received message: %s", msg)
-
-		// Echo the message back to the client (optional)
+		parseMessage(msg, conn)
 		_, err := conn.Write([]byte("Received: " + msg + "\n"))
 		if err != nil {
 			log.Printf("Failed to write response: %v", err)
@@ -81,7 +73,6 @@ func handleConnection(conn net.Conn) {
 	log.Printf("Connection closed: %v", conn.RemoteAddr())
 }
 
-// setupLogging configures logging for the daemon.
 func setupLogging() {
 	file, err := os.OpenFile("daemon.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -90,7 +81,6 @@ func setupLogging() {
 	log.SetOutput(file)
 }
 
-// handleSignals listens for system signals to cleanly shutdown.
 func handleSignals() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
@@ -101,10 +91,36 @@ func handleSignals() {
 	os.Exit(0)
 }
 
-// cleanup performs any necessary cleanup before exiting.
 func cleanup() {
 	log.Println("Cleaning up resources...")
 	if err := os.Remove(socketPath); err != nil {
 		log.Printf("Failed to remove socket file: %v", err)
+	}
+}
+
+func parseMessage(msg string, conn net.Conn) {
+	if strings.HasPrefix(msg, "start") {
+		command := strings.Split(msg, " ")
+		if len(strings.Split(msg, " ")) != 2 {
+			log.Printf("Invalid message: %s", msg)
+			return
+		}
+		_, err := conn.Write([]byte("starting container " + command[1] + "\n"))
+		if err != nil {
+			log.Printf("Failed to write response: %v", err)
+			return
+		}
+	}
+	if strings.HasPrefix(msg, "stop") {
+		command := strings.Split(msg, " ")
+		if len(strings.Split(msg, " ")) != 2 {
+			log.Printf("Invalid message: %s", msg)
+			return
+		}
+		_, err := conn.Write([]byte("stopping container " + command[1] + "\n"))
+		if err != nil {
+			log.Printf("Failed to write response: %v", err)
+			return
+		}
 	}
 }
