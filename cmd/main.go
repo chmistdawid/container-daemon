@@ -1,47 +1,84 @@
 package main
 
 import (
+	"bufio"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 )
 
+const socketPath = "/var/run/cont.sock"
+
 func main() {
-	// Step 1: Detach the process (if necessary)
-	if os.Getppid() != 1 {
-		// Detach by forking the process
-		if forkDaemon() {
+	// Detach process if needed (not covered here for brevity)
+	setupLogging()
+
+	// Clean up the socket file if it exists
+	if err := os.RemoveAll(socketPath); err != nil {
+		log.Fatalf("Failed to remove existing socket file: %v", err)
+	}
+
+	// Create and start the Unix socket server
+	go startUnixSocketServer()
+
+	// Handle signals for clean shutdown
+	go handleSignals()
+
+	// Block main to keep the daemon alive
+	select {}
+}
+
+// startUnixSocketServer starts a Unix domain socket server.
+func startUnixSocketServer() {
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		log.Fatalf("Failed to start Unix socket listener: %v", err)
+	}
+	defer listener.Close()
+
+	// Ensure the socket file has appropriate permissions
+	if err := os.Chmod(socketPath, 0666); err != nil {
+		log.Fatalf("Failed to set permissions on socket file: %v", err)
+	}
+
+	log.Printf("Unix socket server started at %s", socketPath)
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("Failed to accept connection: %v", err)
+			continue
+		}
+		go handleConnection(conn)
+	}
+}
+
+// handleConnection handles incoming connections to the Unix socket.
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	log.Printf("Connection established: %v", conn.RemoteAddr())
+
+	scanner := bufio.NewScanner(conn)
+	for scanner.Scan() {
+		msg := scanner.Text()
+		log.Printf("Received message: %s", msg)
+
+		// Echo the message back to the client (optional)
+		_, err := conn.Write([]byte("Received: " + msg + "\n"))
+		if err != nil {
+			log.Printf("Failed to write response: %v", err)
 			return
 		}
 	}
 
-	// Step 2: Initialize daemon-specific setup
-	setupLogging()
-
-	// Step 3: Handle signals for clean shutdown
-	go handleSignals()
-
-	// Step 4: Main work loop
-	log.Println("Daemon started")
-	for {
-		doWork()
-		time.Sleep(1 * time.Second) // Simulate periodic work
+	if err := scanner.Err(); err != nil {
+		log.Printf("Error reading from connection: %v", err)
 	}
-}
 
-// forkDaemon forks the process to detach it from the terminal.
-func forkDaemon() bool {
-	attr := &os.ProcAttr{
-		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
-	}
-	proc, err := os.StartProcess(os.Args[0], os.Args, attr)
-	if err != nil {
-		log.Fatalf("Failed to fork daemon: %v", err)
-	}
-	log.Printf("Daemon process started with PID %d", proc.Pid)
-	return true
+	log.Printf("Connection closed: %v", conn.RemoteAddr())
 }
 
 // setupLogging configures logging for the daemon.
@@ -58,19 +95,16 @@ func handleSignals() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	<-signals
+
 	log.Println("Daemon shutting down")
 	cleanup()
 	os.Exit(0)
 }
 
-// doWork represents the main task of the daemon.
-func doWork() {
-	log.Println("Daemon is working...")
-	// Add your task here
-}
-
 // cleanup performs any necessary cleanup before exiting.
 func cleanup() {
 	log.Println("Cleaning up resources...")
-	// Add cleanup code here
+	if err := os.Remove(socketPath); err != nil {
+		log.Printf("Failed to remove socket file: %v", err)
+	}
 }
