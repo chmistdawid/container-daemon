@@ -8,6 +8,8 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+
+	"github.com/chmistdawid/container-daemon/cont_image"
 )
 
 const socketPath = "/var/run/cont.sock"
@@ -22,6 +24,8 @@ func main() {
 	go startUnixSocketServer()
 
 	go handleSignals()
+
+	cont_image.DownloadImage()
 
 	select {}
 }
@@ -123,4 +127,14 @@ func parseMessage(msg string, conn net.Conn) {
 			return
 		}
 	}
+}
+
+func runContainer(containerID string) {
+	log.Printf("Running container %s", containerID)
+	image_dir := cont_image.DownloadImage()
+	if image_dir == "" {
+		log.Printf("Failed to download image")
+		return
+	}
+	log.Printf("Image directory: %s", image_dir)
 }
